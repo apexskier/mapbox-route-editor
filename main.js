@@ -10,6 +10,7 @@ function getParameterByName(name, url) {
 }
 
 // fetched from server
+// const initialRoute = await (await fetch(url, optoins)).json()
 const initialRoute = {
   coordinates: [
     [-122.19601353206849, 47.5794307285843],
@@ -45,7 +46,8 @@ const bounds = initialRoute.coordinates.reduce(function(bounds, coord) {
   return bounds.extend(coord);
 }, new mapboxgl.LngLatBounds());
 
-mapboxgl.accessToken = getParameterByName("token");
+const token = getParameterByName("token");
+mapboxgl.accessToken = token;
 const map = new mapboxgl.Map({
   container: "map",
   style: "mapbox://styles/mapbox/streets-v9",
@@ -63,6 +65,10 @@ const draw = new MapboxDraw({
   defaultMode: "draw_line_string"
 });
 
+function pointsEqual([aLat, aLng], [bLat, bLng]) {
+  return aLat === bLat && bLng === bLng;
+}
+
 map.on("load", async function() {
   map.fitBounds(bounds, {
     padding: 20
@@ -76,8 +82,116 @@ map.on("load", async function() {
     from: initialRoute.coordinates[initialRoute.coordinates.length - 1]
   });
 
+  map.addSource("rendered-path-source", {
+    type: "geojson",
+    data: {
+      type: "FeatureCollection",
+      features: []
+    }
+  });
+
+  map.addLayer({
+    id: "rendered-path-layer",
+    type: "line",
+    source: "rendered-path-source"
+  });
+
+  let lastLineCoords = draw.get(editId).geometry.coordinates;
+
+  // keep track of all matched segments between lines
+  // stored by the index of the first point. if i+1 or i+2 changes, we need to
+  // invalidate the segment
+  // we'll be doing some slightly weird stuff by dyanmically deleting and indexing into
+  // an array. If you debug, the array will be mostly empty, which can be confusing
+  let lineMatchLegs = new Array(lastLineCoords.length);
+
+  map.on("draw.update", async function(ev) {
+    const newCoords = ev.features[0].geometry.coordinates;
+    // doesn't account for adding or removing points
+    // just resets if that hppens for now
+    if (lastLineCoords.length === newCoords.length) {
+      let coords;
+      let radiuses;
+
+      // Diff against the last version of the line and only fetch segments for
+      // the point + next and previous coordinates
+      const diffIndex = lastLineCoords.findIndex(
+        (coord, i) => !pointsEqual(newCoords[i], coord)
+      );
+      if (diffIndex < 0) {
+        // just in case
+        return;
+      }
+      coords = [];
+      if (diffIndex > 0) {
+        coords.push(newCoords[diffIndex - 1]);
+        delete lineMatchLegs[diffIndex - 1];
+      }
+      coords.push(newCoords[diffIndex]);
+      delete lineMatchLegs[diffIndex];
+      if (diffIndex < newCoords.length - 1) {
+        coords.push(newCoords[diffIndex + 1]);
+        delete lineMatchLegs[diffIndex + 1];
+      }
+
+      // decrease precision so we get more results. base on zoom, so you can
+      // be more precise when you zoomn in
+      const precision = -Math.pow(map.getZoom(), 2) * (1 / 16) + 50; // TODO: play around with this graph
+      radiuses = coords.map(() => precision);
+
+      // TODO: Use something like RX.js to create a stream for this. This would
+      // allow me to cancel requests when a new one comes in so I'm always using the
+      // latest data if the user updates too fast for the network to keep up
+      const queryCoords = coords.map(coord => coord.join(",")).join(";");
+      const queryRadiuses = radiuses.join(";");
+      const req = await fetch(
+        `https://api.mapbox.com/matching/v5/mapbox/walking/${queryCoords}?access_token=${token}&geometries=geojson&radiuses=${queryRadiuses}`,
+        { method: "GET" }
+      );
+      const data = await req.json();
+      data.matchings.forEach(match => {
+        const startPoint = data.tracepoints.find(
+          tracepoint =>
+            tracepoint &&
+            pointsEqual(tracepoint.location, match.geometry.coordinates[0])
+        );
+        const endPoint = data.tracepoints.find(
+          tracepoint =>
+            tracepoint &&
+            pointsEqual(
+              tracepoint.location,
+              match.geometry.coordinates[match.geometry.coordinates.length - 1]
+            )
+        );
+        if (startPoint && endPoint) {
+          const startIndex =
+            startPoint.waypoint_index < endPoint.waypoint_index
+              ? startPoint.waypoint_index
+              : endPoint.waypoint_index;
+          lineMatchLegs[startIndex + diffIndex] = match;
+        }
+      });
+    } else {
+      lineMatchLegs = new Array(newCoords.length);
+    }
+    console.log(lineMatchLegs);
+
+    // maybe? improve rendering performance by update/render each segment individually
+    map.getSource("rendered-path-source").setData({
+      type: "FeatureCollection",
+      features: lineMatchLegs.filter(l => l).map(match => ({
+        type: "Feature",
+        properties: {},
+        geometry: match.geometry
+      }))
+    });
+    lastLineCoords = newCoords;
+  });
+
   map.on("draw.create", function(ev) {
     console.log(ev);
     console.log("Saving to server", ev.features);
+    // await fetch(url, { body: ev.features, method: "PUT" })
+    // handle errors
   });
 });
