@@ -46,7 +46,12 @@ const bounds = initialRoute.coordinates.reduce((bounds, coord) => {
   return bounds.extend(coord);
 }, new mapboxgl.LngLatBounds());
 
-const token = getParameterByName("token");
+let token = getParameterByName("token");
+
+if (!token) {
+  token = prompt("Enter your mapbox api token");
+}
+
 mapboxgl.accessToken = token;
 const map = new mapboxgl.Map({
   container: "map",
