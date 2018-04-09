@@ -9,3 +9,5 @@ will then update only the affected paths.
 
 Written in vanilla, es6 javascript with no build syste , so modern browsers only
 (I tested with latest Chrome).
+
+Provide an api key with the query paramter `token`. (e.g. https://apexskier.github.io/mapbox-route-editor/?token={your-token=here})
