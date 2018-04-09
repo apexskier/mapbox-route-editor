@@ -148,8 +148,6 @@ map.on("load", async () => {
     updateRenderedPath();
   }
 
-  await resetSegments(lastLineCoords);
-
   map.on("draw.update", async ev => {
     const newCoords = ev.features[0].geometry.coordinates;
 
@@ -177,8 +175,6 @@ map.on("load", async () => {
         mutatedIndexes.push(diffIndex + 1);
       }
 
-      mutatedIndexes.forEach(i => delete lineMatchLegs[i]);
-
       // decrease precision so we get more results. base on zoom, so you can
       // be more precise when you zoomn in
       const precision = -Math.pow(map.getZoom(), 2) * (1 / 16) + 50; // TODO: play around with this graph
@@ -187,6 +183,7 @@ map.on("load", async () => {
       // wait for all the segments to update before proceding
       await Promise.all(
         mutatedIndexes.slice(0, -1).map(async i => {
+          delete lineMatchLegs[i];
           await updateSegment(i, newCoords, precision);
         })
       );
@@ -202,6 +199,7 @@ map.on("load", async () => {
   map.on("draw.create", ev => {
     console.log(ev);
     console.log("Saving to server", ev.features);
+    resetSegments(ev.features[0].geometry.coordinates);
     // await fetch(url, { body: ev.features, method: "PUT" })
     // handle errors
   });
